@@ -1,0 +1,2324 @@
+---
+title: 'Supervised Learning: Assignment 3'
+author: "Natalie Alexander"
+output:
+  pdf_document: default
+  word_document: default
+always_allow_html: true
+---
+
+```{css, include = FALSE, eval=FALSE}
+
+/* Whole document: */
+body{
+  font-family: Courier;
+  font-size: 11pt;
+}
+/* Headers */
+{
+  font-size: 12pt;
+}
+
+```
+
+```{r setup, include=FALSE, eval = TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+options(knitr.table.format = "latex")
+
+```
+
+```{r libraries, include = FALSE, eval=TRUE}
+
+#Libraries
+library(tinytex) #load library for pdf output
+library(dplyr) #load library for data rangling
+library(tidyverse) #load library for data rangling
+library(tidyr) #load library for data rangling 
+library(knitr) #load library for kable table
+library("kableExtra") #load library for extra kable editing
+library(neuralnet) #load library for neuralnet()
+library(caret) #load library for creating folds
+library(doParallel) #load library for parallel processing
+library(foreach) #load library for series processing
+library(e1071) #load library for svm()
+library(nnet) #regularization of neurel net model
+
+```
+
+# *1. Abstract*
+
+In this assignment, neural net and support vector machine models were built to classify handwritten images as even or odd numbers. Parameter tuning was performed to obtain the optimal model. Finally, the best model (a neural net model with test accuracy = 0.950), was used to classify an unseen, unlabeled data set. 
+
+# *2. Introduction*
+
+Support vector machines (SVMs) and neural networks (NNs) are used for classification of categorical- and regression of numeric-dependent variables. The SVM algorithm works by generating a decision boundary or hyperplane that separates the dependent variable into distinct binary classes. A kernel function is used to transform the data into a high-dimensional feature space. As a result, the non-linear boundary of the untransformed feature space becomes a linear boundary in the transformed feature space. The Gaussian kernel function, which is implemented in this assignment, is used when there is no prior knowledge about the data [1]. On the other hand, neural networks are powerful and versatile when it comes to learning complex relationships and patterns in high-dimensional data. Neural networks are not limited to binary outcomes and are the preferred model choice in image recognition [2]. 
+
+```{r EDA, include = FALSE, eval=TRUE, cache = TRUE}
+
+#empty environment
+rm(list=ls())
+
+#read in training data
+traindf <- read.csv("train_new.csv")
+
+#rename column name of outcome variable to be consistent with the  set
+colnames(traindf)[1] <- "label" 
+
+#look at head and tail of data
+##it seems as if there is a lot of 0s in the data
+head_traindf <- head(traindf, 3)[,1:4]
+tail_traindf <- tail(traindf, 3)[,c(1, 783:785)]
+
+#look at min and max of data in the training set
+min_traindf <- min(traindf[2:785]) #0
+max_traindf <- max(traindf[2:785]) #255
+
+#have a look at the data types
+##the pixels should remain as integers
+str(traindf) 
+
+#convert dependent variable to factor
+traindf$label <- as.factor(traindf$label)
+str(traindf) #2 levels: even and odd
+
+#look at dimensions
+##very large datasets!
+dim_traindf <- dim(traindf) #37801 rows by 785 cols
+
+#look at the column names
+##check for duplicates.
+
+##"pixel783" is the last column
+##which is correct because the first column is "label" and we start at "pixel0" 
+colnames(traindf) 
+
+#look at the proportion of the dependent variable
+#  even   odd 
+# 18524 19277 
+summary(traindf$label)
+proportions_traindf <- table(traindf$label)
+percent_even <- round(proportions_traindf[1]/length(traindf$label)*100, 3)
+percent_odd <- round(proportions_traindf[2]/length(traindf$label)*100, 3)
+
+```
+
+# *3. Exploratory data analysis*
+
+**i. Data set**
+
+The train_new data set has `r dim_traindf[1]` observations and `r dim_traindf[2]-1` independent variables ("pixel0" to "pixel783"). A sample of the training data is provided in **table 1 and 2**. Further analysis reveals that the minimum pixel value is `r min_traindf` and the maximum pixel value is `r max_traindf`. The pixel values represent the intensity of the colour. Here 0 represents black and 255 represents white. The categorical dependent variable ('label') was then converted to a factor. As seen before in **tables 1 and 2**, the dependent variable 'label' has two categories: odd and even.
+
+`r kable(head_traindf, caption="Head of training data. The 'label' column represents the dependent variable and the 'pixel' columns represent the independent variables. The first 3 observations and independent variables are shown.", format = "latex", position = "h!")`
+
+`r kable(tail_traindf, caption="Tail of training data. The 'label' column represents the dependent variable and the 'pixel' columns represent the independent variables. The last 3 observations and independent variables are shown.", format = "latex", position = "h!")`
+
+**ii. Visualization**
+
+In **figure 1**, observation 4 (left) and observation 22 (right) produced the numbers 4 and 2, respectively. In order to generate the images, the independent variables (pixel 0 to pixel 783) were converted to a 28 x 28 matrix. The images were then rotated 90 degrees in a clockwise direction. 
+
+```{r testimages, echo=FALSE, fig.cap="Images of pixel data. Left: Observation 4. Right: Observation 22.", fig.dim=c(4, 3), cache = TRUE}
+
+# Let us look at the image of one observation
+## observation 4
+observation4 <- matrix(as.numeric(traindf[4, 2:785]), nrow=28, byrow=TRUE)
+
+#the image is rotated 90 degrees anticlockwise
+#image4 <- image(observation4, col=hcl.colors(255, "Oslo"))
+
+#rotate matrix 90 degrees in a clockwise direction
+rotated_observation4 <- t(apply(observation4, 2, rev))
+
+#rotate image 90 degrees in a clockwise direction
+#plot image with best colours
+par(mfrow=c(1, 2))
+image(rotated_observation4, col=hcl.colors(255, "Oslo"))
+
+################################################################################
+
+# Let us look at the image of another observation
+## observation 22
+observation22 <- matrix(as.numeric(traindf[22, 2:785]), nrow=28, byrow=TRUE)
+
+#rotate matrix 90 degrees in a clockwise direction
+rotated_observation22 <- t(apply(observation22, 2, rev))
+
+#rotate image 90 degrees in a clockwise direction
+#plot image with best colours
+image(rotated_observation22, col=hcl.colors(255, "Oslo"))
+
+```
+
+**iii. Distribution and proportions**
+
+The dependent variable of the training set has `r percent_odd`% 'odd' and `r percent_even`% 'even' observations. We observe approximate class balance. The histograms in **figure 2**, show the frequencies of each pixel distributed across the odd class (left) and the even class (right). For both odd and even classes, we see a similar distribution where pixel 0 and pixel 783 are the highest occurring pixels, while the central pixels occur at much lower frequencies. In both classes we see a bimodal distribution.
+
+```{r histograms, echo=FALSE, fig.cap="Histograms showing the frequency of each pixel value for each class of the dependent variable. A) Odd numbers. B) Even numbers.", fig.dim=c(4, 2.5), cache = TRUE}
+
+# X-axis will contain a subset of pixels
+pixels <- c("pixel0", "pixel50", "pixel100", "pixel150", "pixel200", 
+            "pixel250", "pixel300", "pixel350", "pixel400", "pixel450", 
+            "pixel500", "pixel550", "pixel600", "pixel650", "pixel700", 
+            "pixel783")
+
+# filter even and odd numbers to separate data frames
+even_traindf <- traindf %>% filter(label == "even")
+odd_traindf <- traindf %>% filter(label == "odd")
+
+par(mfrow=c(1, 2)) #set partition for plots
+
+#histogram of odd numbers
+hist(c(as.matrix(odd_traindf[,pixels])), col="darkseagreen2", main="A",
+     xlab="Pixels", xlim=c(0, 300), ylim=c(0, 20000 ))
+
+#histogram of even numbers
+hist(c(as.matrix(even_traindf[,pixels])), col="cadetblue2", main="B",
+     xlab="Pixels", xlim=c(0, 300), ylim=c(0, 20000))
+
+```
+
+# **4. Methods**
+
+## **4.1 Neural net model construction**
+
+**i. Overview**
+
+Pixel data ranges from 0 to 255, however many sources recommend scaling pixel values to range between 0-1 [3-5]. As recommended, all independent variables (pixels) in the train_new data set were divided by 255. The scaled data set was then split into 80% training- and 20% test sets, using the caret package. By default the caret package ensures stratified sampling. Using the h2o package, both training and test sets were converted to h2o format. Ten-fold cross-validation was implemented to build each neural-net model on the training set.  Model parameters were chosen in the direction of the reduced mean cross-validation log-loss. The optimal activation function, number of hidden layers, number of hidden neurons, and the learning rate were determined by the model with the minimum cross-validation (CV) log-loss. Subsequently, L1 (LASSO) and L2 (ridge) regularization was performed on the training models. Input and drop-out methods were also implemented. 
+
+**ii. Activation function**
+
+Parameters of the neural net models can be seen in **table 3** and the CV log-loss can be seen in **figure 3**. The initial model (nn1) used a common activation function (rectifier). However, the CV log-loss of 0.585 was indicative of poor model performance on the training set. Training model nn2 then used a tanh activation function, which decreased the CV log-loss to 0.260. As a result, the tanh activation function was used in subsequent models. The tanh activation function is an excellent alternative to the sigmoid activation function. The tanh activation function enables rapid learning and convergence. In addition, the tanh activation function is commonly used in binary classification problems [6-7].
+
+**iii. Hidden layers and neurons**
+
+A range of hidden layers(hidden neurons) were assessed, from 1(2) in models nn1 to nn2 and 1(3), 1(4) and 2(2, 1), in models nn3 to nn5, respectively. Fewer hidden layers(hidden neurons) served as a proxy for simpler models, while a larger number of hidden layers(hidden neurons) served as a proxy for more complex models. If there was no improvement in the CV log-loss, further increase or decrease in the number of hidden layers (hidden neurons) was not required. The CV log-loss decreased as the number of hidden neurons increased (in a single hidden layer). However, the CV log-loss increased as the number of overall hidden layers increased. Model nn4 with 1 hidden layer (4 hidden neurons) had a minimum CV log-loss of 0.203 and was selected as the best model going forward (**figure 3**). 
+
+**iv. Learning rate (epsilon)**
+
+The learning rate was then assessed, increasing and decreasing the learning rate relative to the default learning rate of 1e-08 in model nn4. Learning rates of 1e-05 and 1e-011 were used in models nn6 and nn7, respectively. We expect faster convergence with a larger learning rate, relative to the smaller learning rate. However, both models nn6 and nn7 performed poorly in comparison to model nn4. Thus, model nn4 remained the best model (**figure 3**). 
+
+**v. L1 vs L2 regularization**
+
+L1 and L2 regularization was then performed to reduce over-fitting of the training model, simplifying the training model as a result. The regularization parameter was consistent with current pipelines which either gradually increase or decrease their lambda values by a factor of 10 [6]. L1 regularization was used in models nn8 to nn12 to shrink weights towards 0 and also drop these insignificant independent variables. Feature selection was performed as a result. The regularization parameter ranged from 1e-1 to 1e-5 (**table 3**). Model nn8 with a regularization parameter of 1e-3, had the best performance and reduced the CV log-loss from 0.203 (model nn4) to 0.150 (model nn8). Model nn8 was the best model going forward. L2 regularization was also assessed to reduce the weights in models nn13 to nn17, with regularization parameters ranging from 1e-1 to 1e-5, respectively. However, model nn8 still outperformed the L2 regularized models in terms of CV log-loss (**figure 3**). 
+
+**vi. Input drop-out ratio**
+
+The input drop-out ratio was tuned to improve model generalization and to prevent model learning and reliance on specific input neurons [9]. The input drop-out ratio ensures model robustness to diverse representations of unseen, test data. Until this point, an input drop-out ratio of 0.1 was used, in accordance with recommendations by the h2o documentation. Model nn18 is a modified version of model nn8, with an input drop-out ratio of 0.2, as recommendation by the h2o documentation. However, model nn8 still had the minimum CV log-loss (0.150) relative to model nn18 with a CV log-loss of 0.155 (**figure 3**). 
+
+**vii. Hidden layer drop-out ratios**
+
+Hidden layer dropout ratios were then tuned to improve model generalization and to prevent co-adaptation of hidden layer neurons [9]. Models nn19 to nn23 had hidden layer drop-out ratios of 0.1 to 0.5, respectively. However, model nn8 still had the minimum CV log-loss, and was chosen as the best neural net model (**figure 3**). 
+
+**ix. Predictions on test data**
+
+As a result of normalization on the training and validation sets, predictions were made on a scaled test set, where pixel values were also divided by 255. Model nn8 with parameters shown in **table 3** was used for test set prediction. Labels were assigned to the test set based on the class (even or odd) with the largest predicted probability. 
+
+```{r  nn, include = FALSE, eval=TRUE, cache = TRUE}
+
+#load packages
+library(h2o)
+library(caret)
+library(e1071)
+
+######################read in training data#####################################
+full_traindf <- read.csv("train_new.csv")
+
+####################scale pixel data to range from 0 to 1#######################
+full_traindf[,2:785] = full_traindf[,2:785]/255 #divide by 255
+max(full_traindf[,2:785]) #max = 1
+min(full_traindf[,2:785]) #min = 0
+
+###########################classification problem###############################
+
+str(full_traindf) # check data types
+full_traindf[, "evenodd"] <- as.factor(full_traindf[, "evenodd"]) #convert outcome variable to factor 
+colnames(full_traindf)[1] <- "label" #rename outcome variable
+str(full_traindf) # check data types again
+
+########################create training and valid set###########################
+
+library(caret) #load caret library
+set.seed(1) #set seed for reproducibility
+
+#check outcome variable's proportions
+#even
+round(((table(full_traindf$label)[1]/length(full_traindf$label))*100), 3)
+
+#odd
+round(((table(full_traindf$label)[2]/length(full_traindf$label))*100), 3)
+
+#split into 80% training set
+set.seed(1) #set seed for reproducability
+ind <- createDataPartition(full_traindf$label,1,.8)[[1]] #indices of training data
+traindf = full_traindf[ind, ] #get rows of training indices
+
+#20% test data
+testdf = full_traindf[-ind, ] #get rows of test indices
+
+#check proportions of even and odd labels in both training and test sets
+((sum(testdf$label == "even")/length(testdf$label))*100)
+((sum(testdf$label == "odd")/length(testdf$label))*100)
+((sum(traindf$label == "even")/length(traindf$label))*100)
+((sum(traindf$label == "odd")/length(traindf$label))*100)
+
+########################start local h2o cluster#################################
+localH2O = h2o.init(ip = "localhost", port = 54321, startH2O = TRUE,min_mem_size = "1g")
+localH2O = h2o.init()
+
+#######################convert data to h2o formats##############################
+options("h2o.use.data.table"=FALSE)
+traindf.h2o <- as.h2o(traindf) #train data
+testdf.h2o <- as.h2o(testdf) #test data
+
+#########################model 1################################################
+
+##choose initial hidden layer, hidden neurons and activation function
+
+# hidden layers = c(2)  **
+# epochs = 1000
+#l1 = 0 default
+#l2 = 0 default
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = rectifier **
+
+load("h2o_model1.RData") #load data
+# h2o_model1 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "rectifier",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(2), # one hidden layer of 2 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1, #recommended
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0, #start with default L1 regularization
+#                          l2=0)  #start with default L2 regularization
+# 
+h2o_model1 #model output
+#save(h2o_model1, file="h2o_model1.RData") #save data
+
+#cross-validation log-loss
+h2o_model1_cv = h2o.logloss(h2o_model1, xval = TRUE)
+h2o_model1_cv
+
+#############################model 2############################################
+
+##Change activation function
+
+# hidden layers = c(2)
+# epochs = 1000
+#l1 = 0 default
+#l2 = 0 default
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh **
+
+load("h2o_model2.RData") #load data
+# h2o_model2 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(2), # one hidden layer of 2 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0, #start with default L1 regularization
+#                          l2=0)  #start with default L2 regularization
+
+h2o_model2 #model output
+#save(h2o_model2, file="h2o_model2.RData") #save data
+
+#cross-validation log-loss
+h2o_model2_cv = h2o.logloss(h2o_model2, xval = TRUE)
+h2o_model2_cv
+
+#############################model 3############################################
+
+## change number of hidden layers and neurons
+
+# hidden layers = c(3)**
+# epochs = 1000
+#l1 = 0 default
+#l2 = 0 default
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+
+load("h2o_model3.RData") #load data
+# h2o_model3 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(3), # one hidden layer of 3 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0, #start with default L1 regularization
+#                          l2=0)  #start with default L2 regularization
+
+h2o_model3 #model output
+#save(h2o_model3, file="h2o_model3.RData") #save data
+
+#cross-validation log-loss
+h2o_model3_cv = h2o.logloss(h2o_model3, xval = TRUE)
+h2o_model3_cv
+
+#############################model 4############################################
+
+## change number of hidden layers and neurons
+
+# hidden layers = c(4) **
+# epochs = 1000
+#l1 = 0 default
+#l2 = 0 default
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+
+load("h2o_model4.RData") #load data
+# h2o_model4 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0, #start with default L1 regularization
+#                          l2=0)  #start with default L2 regularization
+
+h2o_model4 #model output
+#save(h2o_model4, file="h2o_model4.RData") #save data
+
+#cross-validation log-loss
+h2o_model4_cv = h2o.logloss(h2o_model4, xval = TRUE)
+h2o_model4_cv
+
+#############################model 5############################################
+
+## change number of hidden layers and neurons
+
+# hidden layers = c(2, 1) **
+# epochs = 1000
+#l1 = 0 default
+#l2 = 0 default
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+
+load("h2o_model5.RData") #load data
+# h2o_model5 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(2, 1), # one hidden layer of 5 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0, #start with default L1 regularization
+#                          l2=0)  #start with default L2 regularization
+
+h2o_model5 #model output
+#save(h2o_model5, file="h2o_model5.RData") #save data
+
+#cross-validation log-loss
+h2o_model5_cv = h2o.logloss(h2o_model5, xval = TRUE)
+h2o_model5_cv
+
+#############################model 6############################################
+
+##Epsilon or learning rate changed
+
+# hidden layers = 4
+# epochs = 1000
+#l1=1e-1
+#rate decay: 1 default
+#epsilon: 1e-05 default ***
+#input drop out ratio = 0.1
+#activation = tanh
+
+load("h2o_model6.RData") #load data
+# h2o_model6 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-05, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0,
+#                          l2=0)
+
+h2o_model6 #model 
+# save(h2o_model6, file="h2o_model6.RData") #save data
+
+#cross-validation log-loss
+h2o_model6_cv = h2o.logloss(h2o_model6, xval = TRUE)
+h2o_model6_cv 
+
+#############################model 7############################################
+
+##Epsilon or learning rate changed
+
+# hidden layers = 4
+# epochs = 1000
+#l1=1e-1
+#rate decay: 1 default
+#epsilon: 1e-011 default ***
+#input drop out ratio = 0.1
+#activation = tanh
+#epsilon = 1e-011
+
+load("h2o_model7.RData")
+# h2o_model7 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-011, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=0,
+#                          l2=0)
+
+h2o_model7
+# save(h2o_model7, file="h2o_model7.RData")
+
+#cross-validation log-loss
+h2o_model7_cv = h2o.logloss(h2o_model7, xval = TRUE)
+
+
+#############################model 8############################################
+
+## L1 regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = tanh
+#l1=1e-3 **
+
+load("h2o_model8.RData")
+h2o_model8 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+                                   y = 1, #index of y variable label
+                                   training_frame = traindf.h2o, # train data in H2O format
+                                   activation = "tanh",
+                                   balance_classes = TRUE,
+                                   hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+                                   seed = 1,
+                                   reproducible = TRUE,
+                                   adaptive_rate = TRUE, #adapt learning rate
+                                   epsilon = 1e-08, #learning rate
+                                   epochs = 1000, #number of iterations
+                                   variable_importances = TRUE, #assess variable importance which comes from the weights
+                                   export_weights_and_biases=TRUE, #see weights and biases
+                         ignore_const_cols = FALSE, #keep all columns,
+                         input_dropout_ratio = 0.1,
+                         nfolds = 10, #10-fold cross validation
+                         rate_decay = 1, #start with default decay rate
+                         l1=1e-3)
+
+h2o_model8
+# save(h2o_model8, file="h2o_model8.RData")
+
+#cross-validation log-loss
+h2o_model8_cv = h2o.logloss(h2o_model8, xval = TRUE)
+
+#############################model 9############################################
+
+## L1 regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+#l1=1e-5 **
+
+load("h2o_model9.RData")
+# h2o_model9 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-5) 
+
+h2o_model9
+# save(h2o_model9, file="h2o_model9.RData")
+
+#cross-validation log-loss
+h2o_model9_cv = h2o.logloss(h2o_model9, xval = TRUE)
+h2o_model9_cv
+
+#############################model 10############################################
+
+##L1 regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = tanh
+#l1=1e-1 **
+
+load("h2o_model10.RData")
+# h2o_model10 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-1) 
+
+h2o_model10
+# save(h2o_model10, file="h2o_model10.RData")
+
+#cross-validation log-loss
+h2o_model10_cv = h2o.logloss(h2o_model10, xval = TRUE)
+
+
+#############################model 11############################################
+
+##L1 regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 ***
+#activation = tanh
+#l1=1e-2 **
+
+load("h2o_model11.RData")
+# h2o_model11 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-2) 
+
+h2o_model11
+# save(h2o_model11, file="h2o_model11.RData")
+
+#cross-validation log-loss
+h2o_model11_cv = h2o.logloss(h2o_model11, xval = TRUE)
+h2o_model11_cv
+
+
+#############################model 12############################################
+
+##L1 regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+#l1=1e-4 **
+
+load("h2o_model12.RData")
+# h2o_model12 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-4) 
+
+h2o_model12
+# save(h2o_model12, file="h2o_model12.RData")
+
+#cross-validation log-loss
+h2o_model12_cv = h2o.logloss(h2o_model12, xval = TRUE)
+h2o_model12_cv
+
+#############################model 13############################################
+
+#L2 Regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+#l2=1e-1 **
+
+load("h2o_model13.RData")
+# h2o_model13 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l2=1e-1) 
+
+h2o_model13
+# save(h2o_model13, file="h2o_model13.RData")
+
+#cross-validation log-loss
+h2o_model13_cv = h2o.logloss(h2o_model13, xval = TRUE)
+h2o_model13_cv
+
+#############################model 14############################################
+
+#L2 Regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = tanh
+#l2=1e-2 **
+
+load("h2o_model14.RData")
+# h2o_model14 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "tanh",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l2=1e-2) 
+
+h2o_model14
+# save(h2o_model14, file="h2o_model14.RData")
+
+#cross-validation log-loss
+h2o_model14_cv = h2o.logloss(h2o_model14, xval = TRUE)
+h2o_model14_cv
+
+#############################model 15############################################
+
+#L2 Regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = tanh
+#l2=1e-3 **
+
+load("h2o_model15.RData")
+# h2o_model15 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "tanh",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l2=1e-3) 
+
+h2o_model15
+# save(h2o_model15, file="h2o_model15.RData")
+
+#cross-validation log-loss
+h2o_model15_cv = h2o.logloss(h2o_model15, xval = TRUE)
+h2o_model15_cv
+
+#############################model 16############################################
+
+#L2 Regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+#l2=1e-4 **
+
+load("h2o_model16.RData")
+# h2o_model16 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "tanh",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l2=1e-4) 
+
+h2o_model16
+# save(h2o_model16, file="h2o_model16.RData")
+
+#cross-validation log-loss
+h2o_model16_cv = h2o.logloss(h2o_model16, xval = TRUE)
+h2o_model16_cv
+
+#############################model 17############################################
+
+#L2 Regularization
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = tanh
+#l2=1e-5 **
+
+load("h2o_model17.RData")
+# h2o_model17 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "tanh",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l2=1e-5) 
+
+h2o_model17
+# save(h2o_model17, file="h2o_model17.RData")
+
+#cross-validation log-loss
+h2o_model17_cv = h2o.logloss(h2o_model16, xval = TRUE)
+h2o_model17_cv
+
+#############################model 18############################################
+
+## input_dropout_ratio changed
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.2 **
+#activation = tanh
+#l1=1e-3
+
+load("h2o_model18.RData")
+# h2o_model18 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "tanh",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.2,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-3)
+
+h2o_model18
+# save(h2o_model18, file="h2o_model18.RData")
+
+#cross-validation log-loss
+h2o_model18_cv = h2o.logloss(h2o_model18, xval = TRUE)
+
+#############################model 19############################################
+
+# change activation function to tanhwithdropout for change in hidden layer dropout
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = TanhWithDropout **
+#l1=1e-3
+#hidden_dropout_ratios = 0.1 **
+
+load("h2o_model19.RData")
+# h2o_model19 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                    training_frame = traindf.h2o, # train data in H2O format
+#                                    activation = "TanhWithDropout",
+#                                    balance_classes = TRUE,
+#                                    hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                    seed = 1,
+#                                    reproducible = TRUE,
+#                                    adaptive_rate = TRUE, #adapt learning rate
+#                                    epsilon = 1e-08, #learning rate
+#                                    epochs = 1000, #number of iterations
+#                                    variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                    export_weights_and_biases=TRUE, #see weights and biases
+#                          ignore_const_cols = FALSE, #keep all columns,
+#                          input_dropout_ratio = 0.1,
+#                          hidden_dropout_ratios = 0.1,
+#                          nfolds = 10, #10-fold cross validation
+#                          rate_decay = 1, #start with default decay rate
+#                          l1=1e-3)
+
+h2o_model19
+# save(h2o_model19, file="h2o_model19.RData")
+
+#cross-validation log-loss
+h2o_model19_cv = h2o.logloss(h2o_model19, xval = TRUE)
+
+#############################model 20############################################
+
+# change activation function to tanhwithdropout for change in hidden layer dropout
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = TanhWithDropout **
+#l1=1e-3
+#hidden_dropout_ratios = 0.2 **
+
+load("h2o_model20.RData")
+# h2o_model20 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "TanhWithDropout",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 hidden_dropout_ratios = 0.2,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l1=1e-3)
+
+h2o_model20
+# save(h2o_model20, file="h2o_model20.RData")
+
+#cross-validation log-loss
+h2o_model20_cv = h2o.logloss(h2o_model20, xval = TRUE)
+
+#############################model 21############################################
+
+# change activation function to tanhwithdropout for change in hidden layer dropout
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = TanhWithDropout **
+#l1=1e-3
+#hidden_dropout_ratios = 0.3 **
+
+load("h2o_model21.RData")
+# h2o_model21 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "TanhWithDropout",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 hidden_dropout_ratios = 0.3,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l1=1e-3)
+
+h2o_model21
+# save(h2o_model21, file="h2o_model21.RData")
+
+#cross-validation log-loss
+h2o_model21_cv = h2o.logloss(h2o_model21, xval = TRUE)
+
+#############################model 22############################################
+
+# change activation function to tanhwithdropout for change in hidden layer dropout
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1
+#activation = TanhWithDropout **
+#l1=1e-4
+#hidden_dropout_ratios = 0.4 **
+
+load("h2o_model22.RData")
+# h2o_model22 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "TanhWithDropout",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 hidden_dropout_ratios = 0.4,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l1=1e-3)
+
+h2o_model22
+# save(h2o_model22, file="h2o_model22.RData")
+
+#cross-validation log-loss
+h2o_model22_cv = h2o.logloss(h2o_model22, xval = TRUE)
+
+#############################model 23############################################
+
+# change activation function to tanhwithdropout for change in hidden layer dropout
+
+# hidden layers = 4
+# epochs = 1000
+#rate decay: 1 default
+#epsilon: 1e-08 default
+#input drop out ratio = 0.1 
+#activation = TanhWithDropout **
+#l1=1e-5
+#hidden_dropout_ratios = 0.5 **
+
+load("h2o_model23.RData")
+# h2o_model23 <- h2o.deeplearning(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                 y = 1, #index of y variable label
+#                                 training_frame = traindf.h2o, # train data in H2O format
+#                                 activation = "TanhWithDropout",
+#                                 balance_classes = TRUE,
+#                                 hidden = c(4), # one hidden layer of 4 nodes excluding bias node
+#                                 seed = 1,
+#                                 reproducible = TRUE,
+#                                 adaptive_rate = TRUE, #adapt learning rate
+#                                 epsilon = 1e-08, #learning rate
+#                                 epochs = 1000, #number of iterations
+#                                 variable_importances = TRUE, #assess variable importance which comes from the weights
+#                                 export_weights_and_biases=TRUE, #see weights and biases
+#                                 ignore_const_cols = FALSE, #keep all columns,
+#                                 input_dropout_ratio = 0.1,
+#                                 hidden_dropout_ratios = 0.5,
+#                                 nfolds = 10, #10-fold cross validation
+#                                 rate_decay = 1, #start with default decay rate
+#                                 l1=1e-3)
+
+h2o_model23
+# save(h2o_model23, file="h2o_model23.RData")
+
+#cross-validation log-loss
+h2o_model23_cv = h2o.logloss(h2o_model23, xval = TRUE)
+
+#######################comparison of neural net models##########################
+
+# Empty table
+neuralnet_h2o <- data.frame("Model ID" = NA,
+  "Activation function" = NA, "Hidden layers(neurons)" = NA, 
+  "Epsilon" = NA, "Epochs" = NA, 
+  "Input drop-out ratio" = NA, "Hidden drop-out ratios" = NA, 
+  "L1 regularization" = NA, "L2 regularization" = NA, "CV log-loss" = NA)
+
+#rename col names of table
+colnames(neuralnet_h2o) = c("Model ID",
+            "Activation function",
+            "Hidden layers(neurons)", "Epsilon", "Epochs", "Input drop-out ratio",
+            "Hidden drop-out ratios", "L1 regularization", "L2 regularization",
+   "CV log-loss")
+
+# Add model data to table 
+neuralnet_h2o[1, 1] <- "nn1"
+neuralnet_h2o[1, 2] <- "Rectifier"
+neuralnet_h2o[1, 3] <- "1(2)"
+neuralnet_h2o[1, 4] <- "1e-08"
+neuralnet_h2o[1, 5] <- 1000 
+neuralnet_h2o[1, 6] <- 0.1
+neuralnet_h2o[1, 7] <- "0.0"
+neuralnet_h2o[1, 8] <- "0.0"
+neuralnet_h2o[1, 9] <- "0.0"
+neuralnet_h2o[1, 10] <- round(h2o_model1_cv, 3)
+
+neuralnet_h2o[2, 1] <- "nn2"
+neuralnet_h2o[2, 2] <- "tanh"
+neuralnet_h2o[2, 3] <- "1(2)"
+neuralnet_h2o[2, 4] <- "1e-08"
+neuralnet_h2o[2, 5] <- 1000 
+neuralnet_h2o[2, 6] <- 0.1
+neuralnet_h2o[2, 7] <- "0.0"
+neuralnet_h2o[2, 8] <- "0.0"
+neuralnet_h2o[2, 9] <- "0.0"
+neuralnet_h2o[2, 10] <- round(h2o_model2_cv, 3)
+
+neuralnet_h2o[3, 1] <- "nn3"
+neuralnet_h2o[3, 2] <- "tanh"
+neuralnet_h2o[3, 3] <- "1(3)"
+neuralnet_h2o[3, 4] <- "1e-08"
+neuralnet_h2o[3, 5] <- 1000 
+neuralnet_h2o[3, 6] <- 0.1
+neuralnet_h2o[3, 7] <- "0.0"
+neuralnet_h2o[3, 8] <- "0.0"
+neuralnet_h2o[3, 9] <- "0.0"
+neuralnet_h2o[3, 10] <- round(h2o_model3_cv, 3)
+
+neuralnet_h2o[4, 1] <- "nn4"
+neuralnet_h2o[4, 2] <- "tanh"
+neuralnet_h2o[4, 3] <- "1(4)"
+neuralnet_h2o[4, 4] <- "1e-08"
+neuralnet_h2o[4, 5] <- 1000 
+neuralnet_h2o[4, 6] <- 0.1
+neuralnet_h2o[4, 7] <- "0.0"
+neuralnet_h2o[4, 8] <- "0.0"
+neuralnet_h2o[4, 9] <- "0.0"
+neuralnet_h2o[4, 10] <- round(h2o_model4_cv, 3)
+
+neuralnet_h2o[5, 1] <- "nn5"
+neuralnet_h2o[5, 2] <- "tanh"
+neuralnet_h2o[5, 3] <- "2(2, 1)"
+neuralnet_h2o[5, 4] <- "1e-08"
+neuralnet_h2o[5, 5] <- 1000 
+neuralnet_h2o[5, 6] <- 0.1
+neuralnet_h2o[5, 7] <- "0.0"
+neuralnet_h2o[5, 8] <- "0.0"
+neuralnet_h2o[5, 9] <- "0.0"
+neuralnet_h2o[5, 10] <- round(h2o_model5_cv, 3)
+
+neuralnet_h2o[6, 1] <- "nn6"
+neuralnet_h2o[6, 2] <- "tanh"
+neuralnet_h2o[6, 3] <- "1(4)"
+neuralnet_h2o[6, 4] <- "1e-05"
+neuralnet_h2o[6, 5] <- 1000 
+neuralnet_h2o[6, 6] <- 0.1
+neuralnet_h2o[6, 7] <- "0.0"
+neuralnet_h2o[6, 8] <- "0.0"
+neuralnet_h2o[6, 9] <- "0.0"
+neuralnet_h2o[6, 10] <- round(h2o_model6_cv, 3)
+
+neuralnet_h2o[7, 1] <- "nn7"
+neuralnet_h2o[7, 2] <- "tanh"
+neuralnet_h2o[7, 3] <- "1(4)"
+neuralnet_h2o[7, 4] <- "1e-011"
+neuralnet_h2o[7, 5] <- 1000 
+neuralnet_h2o[7, 6] <- 0.1
+neuralnet_h2o[7, 7] <- "0.0"
+neuralnet_h2o[7, 8] <- "0.0"
+neuralnet_h2o[7, 9] <- "0.0"
+neuralnet_h2o[7, 10] <- round(h2o_model7_cv, 3)
+
+neuralnet_h2o[8, 1] <- "nn8"
+neuralnet_h2o[8, 2] <- "tanh"
+neuralnet_h2o[8, 3] <- "1(4)"
+neuralnet_h2o[8, 4] <- "1e-08"
+neuralnet_h2o[8, 5] <- 1000 
+neuralnet_h2o[8, 6] <- 0.1
+neuralnet_h2o[8, 7] <- "0.0"
+neuralnet_h2o[8, 8] <- 1e-3
+neuralnet_h2o[8, 9] <- "0.0"
+neuralnet_h2o[8, 10] <- round(h2o_model8_cv, 3)
+
+neuralnet_h2o[9, 1] <- "nn9"
+neuralnet_h2o[9, 2] <- "tanh"
+neuralnet_h2o[9, 3] <- "1(4)"
+neuralnet_h2o[9, 4] <- "1e-08"
+neuralnet_h2o[9, 5] <- 1000 
+neuralnet_h2o[9, 6] <- 0.1
+neuralnet_h2o[9, 7] <- "0.0"
+neuralnet_h2o[9, 8] <- 1e-5
+neuralnet_h2o[9, 9] <- "0.0"
+neuralnet_h2o[9, 10] <- round(h2o_model9_cv, 3)
+
+neuralnet_h2o[10, 1] <- "nn10"
+neuralnet_h2o[10, 2] <- "tanh"
+neuralnet_h2o[10, 3] <- "1(4)"
+neuralnet_h2o[10, 4] <- "1e-08"
+neuralnet_h2o[10, 5] <- 1000 
+neuralnet_h2o[10, 6] <- 0.1
+neuralnet_h2o[10, 7] <- "0.0"
+neuralnet_h2o[10, 8] <- 1e-1
+neuralnet_h2o[10, 9] <- "0.0"
+neuralnet_h2o[10, 10] <- round(h2o_model10_cv, 3)
+
+neuralnet_h2o[11, 1] <- "nn11"
+neuralnet_h2o[11, 2] <- "tanh"
+neuralnet_h2o[11, 3] <- "1(4)"
+neuralnet_h2o[11, 4] <- "1e-08"
+neuralnet_h2o[11, 5] <- 1000 
+neuralnet_h2o[11, 6] <- 0.1
+neuralnet_h2o[11, 7] <- "0.0"
+neuralnet_h2o[11, 8] <- 1e-2
+neuralnet_h2o[11, 9] <- "0.0"
+neuralnet_h2o[11, 10] <- round(h2o_model11_cv, 3)
+
+neuralnet_h2o[12, 1] <- "nn12"
+neuralnet_h2o[12, 2] <- "tanh"
+neuralnet_h2o[12, 3] <- "1(4)"
+neuralnet_h2o[12, 4] <- "1e-08"
+neuralnet_h2o[12, 5] <- 1000 
+neuralnet_h2o[12, 6] <- 0.1
+neuralnet_h2o[12, 7] <- "0.0"
+neuralnet_h2o[12, 8] <- 1e-4
+neuralnet_h2o[12, 9] <- "0.0"
+neuralnet_h2o[12, 10] <- round(h2o_model12_cv, 3)
+
+neuralnet_h2o[13, 1] <- "nn13"
+neuralnet_h2o[13, 2] <- "tanh"
+neuralnet_h2o[13, 3] <- "1(4)"
+neuralnet_h2o[13, 4] <- "1e-08"
+neuralnet_h2o[13, 5] <- 1000 
+neuralnet_h2o[13, 6] <- 0.1
+neuralnet_h2o[13, 7] <- "0.0"
+neuralnet_h2o[13, 8] <- "0.0"
+neuralnet_h2o[13, 9] <- 1e-1
+neuralnet_h2o[13, 10] <- round(h2o_model13_cv, 3)
+
+neuralnet_h2o[14, 1] <- "nn14"
+neuralnet_h2o[14, 2] <- "tanh"
+neuralnet_h2o[14, 3] <- "1(4)"
+neuralnet_h2o[14, 4] <- "1e-08"
+neuralnet_h2o[14, 5] <- 1000 
+neuralnet_h2o[14, 6] <- 0.1
+neuralnet_h2o[14, 7] <- "0.0"
+neuralnet_h2o[14, 8] <- "0.0"
+neuralnet_h2o[14, 9] <- 1e-2
+neuralnet_h2o[14, 10] <- round(h2o_model14_cv, 3)
+
+neuralnet_h2o[15, 1] <- "nn15"
+neuralnet_h2o[15, 2] <- "tanh"
+neuralnet_h2o[15, 3] <- "1(4)"
+neuralnet_h2o[15, 4] <- "1e-08"
+neuralnet_h2o[15, 5] <- 1000 
+neuralnet_h2o[15, 6] <- 0.1
+neuralnet_h2o[15, 7] <- "0.0"
+neuralnet_h2o[15, 8] <- "0.0"
+neuralnet_h2o[15, 9] <- 1e-3
+neuralnet_h2o[15, 10] <- round(h2o_model15_cv, 3)
+
+neuralnet_h2o[16, 1] <- "nn16"
+neuralnet_h2o[16, 2] <- "tanh"
+neuralnet_h2o[16, 3] <- "1(4)"
+neuralnet_h2o[16, 4] <- "1e-08"
+neuralnet_h2o[16, 5] <- 1000 
+neuralnet_h2o[16, 6] <- 0.1
+neuralnet_h2o[16, 7] <- "0.0"
+neuralnet_h2o[16, 8] <- "0.0"
+neuralnet_h2o[16, 9] <- 1e-4
+neuralnet_h2o[16, 10] <- round(h2o_model16_cv, 3)
+
+neuralnet_h2o[17, 1] <- "nn17"
+neuralnet_h2o[17, 2] <- "tanh"
+neuralnet_h2o[17, 3] <- "1(4)"
+neuralnet_h2o[17, 4] <- "1e-08"
+neuralnet_h2o[17, 5] <- 1000 
+neuralnet_h2o[17, 6] <- 0.1
+neuralnet_h2o[17, 7] <- "0.0"
+neuralnet_h2o[17, 8] <- "0.0"
+neuralnet_h2o[17, 9] <- 1e-5
+neuralnet_h2o[17, 10] <- round(h2o_model17_cv, 3)
+
+neuralnet_h2o[18, 1] <- "nn18"
+neuralnet_h2o[18, 2] <- "tanh"
+neuralnet_h2o[18, 3] <- "1(4)"
+neuralnet_h2o[18, 4] <- "1e-08"
+neuralnet_h2o[18, 5] <- 1000 
+neuralnet_h2o[18, 6] <- 0.2
+neuralnet_h2o[18, 7] <- "0.0"
+neuralnet_h2o[18, 8] <- 1e-3
+neuralnet_h2o[18, 9] <- "0.0"
+neuralnet_h2o[18, 10] <- round(h2o_model18_cv, 3)
+
+
+neuralnet_h2o[19, 1] <- "nn19"
+neuralnet_h2o[19, 2] <- "tanh"
+neuralnet_h2o[19, 3] <- "1(4)"
+neuralnet_h2o[19, 4] <- "1e-08"
+neuralnet_h2o[19, 5] <- 1000 
+neuralnet_h2o[19, 6] <- 0.1
+neuralnet_h2o[19, 7] <- 0.1
+neuralnet_h2o[19, 8] <- 1e-3
+neuralnet_h2o[19, 9] <- "0.0"
+neuralnet_h2o[19, 10] <- round(h2o_model19_cv, 3)
+
+neuralnet_h2o[20, 1] <- "nn20"
+neuralnet_h2o[20, 2] <- "tanh"
+neuralnet_h2o[20, 3] <- "1(4)"
+neuralnet_h2o[20, 4] <- "1e-08"
+neuralnet_h2o[20, 5] <- 1000 
+neuralnet_h2o[20, 6] <- 0.1
+neuralnet_h2o[20, 7] <- 0.2
+neuralnet_h2o[20, 8] <- 1e-3
+neuralnet_h2o[20, 9] <- "0.0"
+neuralnet_h2o[20, 10] <- round(h2o_model20_cv, 3)
+
+neuralnet_h2o[21, 1] <- "nn21"
+neuralnet_h2o[21, 2] <- "tanh"
+neuralnet_h2o[21, 3] <- "1(4)"
+neuralnet_h2o[21, 4] <- "1e-08"
+neuralnet_h2o[21, 5] <- 1000 
+neuralnet_h2o[21, 6] <- 0.1
+neuralnet_h2o[21, 7] <- 0.3
+neuralnet_h2o[21, 8] <- 1e-3
+neuralnet_h2o[21, 9] <- "0.0"
+neuralnet_h2o[21, 10] <- round(h2o_model21_cv, 3)
+
+neuralnet_h2o[22, 1] <- "nn22"
+neuralnet_h2o[22, 2] <- "tanh"
+neuralnet_h2o[22, 3] <- "1(4)"
+neuralnet_h2o[22, 4] <- "1e-08"
+neuralnet_h2o[22, 5] <- 1000 
+neuralnet_h2o[22, 6] <- 0.1
+neuralnet_h2o[22, 7] <- 0.4
+neuralnet_h2o[22, 8] <- 1e-3
+neuralnet_h2o[22, 9] <- "0.0"
+neuralnet_h2o[22, 10] <- round(h2o_model22_cv, 3)
+
+neuralnet_h2o[23, 1] <- "nn23"
+neuralnet_h2o[23, 2] <- "tanh"
+neuralnet_h2o[23, 3] <- "1(4)"
+neuralnet_h2o[23, 4] <- "1e-08"
+neuralnet_h2o[23, 5] <- 1000 
+neuralnet_h2o[23, 6] <- 0.1
+neuralnet_h2o[23, 7] <- 0.5
+neuralnet_h2o[23, 8] <- 1e-3
+neuralnet_h2o[23, 9] <- "0.0"
+neuralnet_h2o[23, 10] <- round(h2o_model23_cv, 3)
+
+############################model performance###################################
+
+h2o_model8 # best neural net model
+h2o_model8@parameters #parameters
+h2o.performance(h2o_model8, train = TRUE) #performance on train set
+h2o.logloss(h2o_model8, train = TRUE)  #extract logloss on train
+h2o.varimp(h2o_model8) #variable importance
+
+#weights and bias
+h2o.weights(h2o_model8,matrix_id=1) # weights of input to hidden layer
+h2o.biases(h2o_model8,vector_id=1) #bias of input to hidden layer
+h2o.weights(h2o_model8,matrix_id=2) #weights of hidden layer to output layer
+h2o.biases(h2o_model8,vector_id=2) #bias of hidden layer to output layer
+
+# Training data predictions
+nn_train_pred <- h2o.predict(h2o_model8, traindf.h2o) #predictions using h2o_model8 and training data
+nn_train_pred #predicted probabilities 
+nn_train_pred[,1] #predicted classes
+nn_yhat_train = as.factor(as.matrix(nn_train_pred$predict)) #convert to factor
+nn_train_confmat <- confusionMatrix(nn_yhat_train, traindf$label) #classification accuracy on train set
+#accuracy = 0.9533
+
+
+# Test data predictions
+nn_test_pred <- h2o.predict(h2o_model8, testdf.h2o) #predictions using h2o_model8 and test data
+nn_test_pred #predicted probabilities 
+nn_test_pred[,1] #predicted classes
+nn_yhat_test = as.factor(as.matrix(nn_test_pred$predict)) #convert to factor
+nn_test_confmat = confusionMatrix(table(nn_yhat_test, testdf$label)) #classification accuracy on test set
+#Accuracy : 0.9501
+# Confusion Matrix and Statistics
+# nn_yhat_test even  odd
+#         even 3535  208
+#         odd   169 3647
+#                                          
+#                Accuracy : 0.9501         
+#                  95% CI : (0.945, 0.9549)
+#     No Information Rate : 0.51           
+#     P-Value [Acc > NIR] : < 2e-16        
+#                                          
+#                   Kappa : 0.9002         
+#                                          
+#  Mcnemar's Test P-Value : 0.05034        
+#                                          
+#             Sensitivity : 0.9544         
+#             Specificity : 0.9460         
+#          Pos Pred Value : 0.9444         
+#          Neg Pred Value : 0.9557         
+#              Prevalence : 0.4900         
+#          Detection Rate : 0.4677         
+#    Detection Prevalence : 0.4952         
+#       Balanced Accuracy : 0.9502         
+#                                          
+#        'Positive' Class : even  
+
+
+
+# true positive rate or recall = true positives/total positives
+recall_nn <- round(0.9544, 3)
+
+# true negative rate or specificity = true negatives/total negatives
+specificity_nn <- round(0.9460, 3)
+
+# positive predictive value = true positives/(true positives+false positives)
+ppv_nn <-  0.9444
+
+# F1 score = 2*(PPV*TPR/(PPV+TPR))
+f1_nn <- 2*((ppv_nn*recall_nn)/(ppv_nn+ppv_nn))
+
+
+# FPR = 1 - TNR
+FPR_nn <- 1 - specificity_nn
+
+#FNR = 1 - TPR
+FNR_nn <- 1 - recall_nn
+
+#Matthew's correlation coefiicent
+MCC_nn <- ((specificity_nn*recall_nn)-(FNR_nn*FPR_nn))/sqrt((recall_nn+FPR_nn)*(recall_nn+FNR_nn)*(specificity_nn+FPR_nn)*(specificity_nn+FNR_nn))
+
+
+#############################BEST OVERALL MODEL#################################
+
+#performance on test set
+perf_nn <- h2o.performance(h2o_model8, testdf.h2o)
+perf_nn
+
+# retrieve the AUC for the test data
+auc_test_nn = h2o.auc(perf_nn)
+
+# retrieve the AUC for both the training and validation data:
+auc_train_cv_nn = h2o.auc(h2o_model8,  train = TRUE, xval = TRUE)
+
+############################weights_bias########################################
+
+#get levels
+#h2o.levels(traindf.h2o[,1])
+
+#weights of neuron in input layer to neurons in hidden layer
+##only variable important pixels: 485 486 487 488 457 541 516 515 542 708
+weights_input_hidden = round(h2o.weights(h2o_model8,matrix_id=1), 3)
+weights_input_hidden  = as.data.frame(weights_input_hidden[,c(486, 487, 488, 489, 458, 542, 517, 516, 543, 709)])
+weights_input_hidden  = as.data.frame.array(weights_input_hidden)
+weights_input_hidden  = as.data.frame(weights_input_hidden)
+rownames(weights_input_hidden) = c("Hidden neuron 1", "Hidden neuron 2", "Hidden neuron 3", "Hidden neuron 4")
+
+
+#weights hidden layer (columns) to output layer (row)
+weights_hidden_output  = round(h2o.weights(h2o_model8,matrix_id=2), 3)
+weights_hidden_output  = as.data.frame.array(weights_hidden_output)
+weights_hidden_output  = as.data.frame(weights_hidden_output)
+colnames(weights_hidden_output) = c("Hidden neuron 1", "Hidden neuron 2", "Hidden neuron 3", "Hidden neuron 4")
+rownames(weights_hidden_output) = c("Even", "Odd")
+
+
+#biases input layer to hidden layer
+bias_input_hidden  = round(h2o.biases(h2o_model8,vector_id=1), 3)
+bias_input_hidden = as.data.frame.array(bias_input_hidden)
+bias_input_hidden = as.data.frame(bias_input_hidden)
+colnames(bias_input_hidden) = c("Bias")
+rownames(bias_input_hidden ) = c("Input layer to hidden neuron 1", "Input layer to hidden neuron 2", "Input layer to hidden neuron 3", "Input layer to hidden neuron 4")
+
+
+#bias hidden layer to output
+bias_hidden_output  = round(h2o.biases(h2o_model8,vector_id=2), 3)
+bias_hidden_output   = as.data.frame.array(bias_hidden_output)
+bias_hidden_output   = as.data.frame(bias_hidden_output )
+colnames(bias_hidden_output ) = c("Bias")
+rownames(bias_hidden_output) = c("Hidden layer to output(even)", "Hidden layer to output (odd)")
+
+#bind bias to single table
+biasdf = rbind(bias_input_hidden, bias_hidden_output)
+
+```
+
+`r kable(neuralnet_h2o, align = "c", caption="Neural net models built with ten-fold cross-validation", format = "latex", position = "h!") %>% kable_classic(full_width = F) %>% footnote(number = c("Number of independent variables = 784. Number of dependent variables = 1. Number of dependent variable categories = 2. ", "Train size = 27218. Validation size = 3024. Test size = 7559")) %>% kable_styling(latex_options="scale_down")`
+
+```{r nn_cverror, echo=FALSE, fig.cap="Mean ten-fold cross-validation log-loss across neural net models", fig.dim = c(6, 4), cache = TRUE}
+
+#load libraries
+library(ggplot2)
+library(gridExtra)
+
+x = c(1:23)  #models
+
+# mean cv log loss
+y = c(neuralnet_h2o[1, 10], neuralnet_h2o[2, 10], neuralnet_h2o[3, 10], neuralnet_h2o[4, 10],
+      neuralnet_h2o[5, 10], neuralnet_h2o[6, 10], neuralnet_h2o[7, 10], neuralnet_h2o[8, 10],
+      neuralnet_h2o[9, 10], neuralnet_h2o[10, 10], neuralnet_h2o[11, 10], neuralnet_h2o[12, 10],
+      neuralnet_h2o[13, 10], neuralnet_h2o[14, 10], neuralnet_h2o[15, 10], neuralnet_h2o[16, 10],
+      neuralnet_h2o[17, 10], neuralnet_h2o[18, 10], neuralnet_h2o[19, 10], neuralnet_h2o[20, 10],
+      neuralnet_h2o[21, 10], neuralnet_h2o[22, 10], neuralnet_h2o[23, 10])
+
+# data frame of x and y
+plot_df = data.frame("x" = x, "y" = y)
+  
+#plot CV log loss 
+ggplot(plot_df, aes(x, y)) +
+  geom_point(color="darkblue")+
+  geom_line()+
+  xlab("Neural net model")+
+  ylab("Mean CV log-loss")+
+  theme_minimal()+
+  geom_text(aes(label = round(y, 3)), vjust = -0.5, angle=90, col="darkblue")+
+  ylim(0.1, max(y)*1.1)+
+  xlim(1, 25)+
+  theme(text = element_text(size = 10))
+
+```
+
+
+```{r results1, echo=FALSE, fig.cap="Test set ROC curve for neural net model nn8", fig.dim = c(6, 4), cache = TRUE}
+
+#############################BEST OVERALL MODEL#################################
+
+#performance on test set
+perf_nn <- h2o.performance(h2o_model8, testdf.h2o)
+
+# retrieve the AUC for the test data
+auc_test_nn = round(h2o.auc(perf_nn), 3)
+
+# retrieve the AUC for both the training and validation data:
+auc_train_cv_nn = round(h2o.auc(h2o_model8,  train = TRUE, xval = TRUE), 3)
+
+#extract tpr and fpr and thresholds
+tpr = perf_nn@metrics[["thresholds_and_metric_scores"]][["recall"]]
+fpr = perf_nn@metrics[["thresholds_and_metric_scores"]][["fpr"]]
+threshold = perf_nn@metrics[["thresholds_and_metric_scores"]][["threshold"]]
+best_class = round(cbind(tpr, fpr, threshold)[169, ], 3) #best classifier
+
+#plot roc curve
+plot(fpr, tpr, type="l", lwd = 3, ylim=c(0, 1), xlab = "False positive rate",
+     ylab="True positive rate", col="darkblue")
+x=c(0, 0.2, 0.4, 0.6, 0.8, 1)
+y=c(0, 0.2, 0.4, 0.6, 0.8, 1)
+points(x, y, type="l", lty=2, lwd=3, col = "darkred")
+points( 0.041, 0.942, lwd=3, col="red", pch=16, cex= 1.3)
+legend("bottomright", title = "Key", legend=c("ROC curve", "Random classifier", 
+"TPR = 0.942, FPR = 0.041, Threshold = 0.612"), 
+       col=c("darkblue", "darkred", "red", NA, NA), pch=c(NA, NA, 16, NA, NA), 
+       lwd=c(3, 3, NA, NA, NA, NA), lty=c(1, 2, NA, NA, NA),
+       cex =0.65, title.col = "darkblue", title.cex=0.6)
+
+```
+
+
+```{r results2, echo=FALSE, fig.cap="Variable importance plot of neural net model nn8. The top pixels represent a large reduction in squared training error. The bottom pixels represent a smaller reduction in squared training error", fig.dim = c(4, 4), cache = TRUE}
+
+# Variable importance plot of best model nn8
+h2o.varimp_plot(h2o_model8)
+
+```
+
+## **4.2 Support Vector Machine (SVM) model construction**
+
+**i. Overview**
+
+For SVM model construction, h2o's PSVM function was implemented, which only solves binary classification problems. The entire train_new data set was scaled by dividing the independent variables (pixels) by 255. In this way, the independent variables were normalized to range between 0 and 1. The scaled data was then split into 80% training and 20% test sets. The training data was further split into 80% training data and 20% validation data sets. All data sets were converted to h2o format. The models were built on the new training set, while the validation set was used to calculate the mean misclassification rate. The model with the minimum mean misclassification rate on the validation set, was the optimal model. The best SVM model could then be used to test model performance on the test set.
+
+
+**ii. Kernel and cost**
+
+**Table 4** shows the SVM model parameters and **figure 6** shows the mean misclassification rate on the validation set. H2o's PSVM only supports Gaussian kernel functions, and so a Gaussian kernel function was applied to all models. The cost value, also known as the regularization parameter, was tuned in the direction of reducing mean misclassification rate on the validation set. The cost parameter was tuned using C = 1, 0.1, 0.01 and 3 in models svm1 to svm4, respectively. The cost parameter served as a regularization mechanism [10]. Increasing the cost value applies a larger penalty to model misclassification, reducing the margin and number of support vectors. Decreasing cost values applies a smaller penalty to model misclassification, increasing the margin and number of support vectors. Notably, the number of support vectors did not decrease across the models (**table 4**). Model svm2 had the minimum mean misclassification rate (0.198, **figure 6**) on the validation set and so cost = 0.1 was chosen as the cost parameter going forward. 
+
+**iii. Gamma**
+
+Thereafter, the gamma parameter was tuned to minimize the mean misclassification rate on the validation set, using gamma = 1, 0.3 and 0.5 in models svm5 to svm7, respectively. The gamma value controls the radius of observations that influence the decision boundary [10]. I chose large gamma values as a proxy for far-away observations that influence the decision boundary. I also chose small gamma values as a proxy for close-by observations that influence the decision boundary. However, model svm2 with default gamma = -1 still had the best mean misclassification rate (0.198) on the validation set (**figure 6**). 
+
+**iv. Predictions on the test set**
+
+Overall, model svm2, with cost = 0.1 and gamma = -1, had the minimum mean misclassification rate (0.198) on the validation set (**figure 6**). **Table 4** shows all optimal parameters for model svm2. As a result of normalization on the training and validation sets, predictions were made on a scaled test set, where pixel values were divided by 255. Model svm2 was used to make predictions on the test set. Labels were assigned to the scaled test set according to the class (even or odd) with the largest predicted probability. 
+
+```{r  psvm, include = FALSE, eval=TRUE, cache = TRUE}
+
+#load packages
+library(h2o)
+library(caret)
+library(e1071)
+
+
+######################read in training data#####################################
+full_traindf <- read.csv("train_new.csv")
+
+####################scale pixel data to range from 0 to 1#######################
+full_traindf[,2:785] = full_traindf[,2:785]/255 #divide by 255
+max(full_traindf[,2:785]) #max = 1
+min(full_traindf[,2:785]) #min = 0
+
+###########################classification problem###############################
+
+str(full_traindf) # check data types
+full_traindf[, "evenodd"] <- as.factor(full_traindf[, "evenodd"]) #convert outcome variable to factor 
+colnames(full_traindf)[1] <- "label" #rename outcome variable
+str(full_traindf) # check data types again
+
+########################create training and valid set###########################
+
+library(caret) #load caret library
+set.seed(1) #set seed for reproducibility
+
+#check outcome variable's proportions
+#even
+round(((table(full_traindf$label)[1]/length(full_traindf$label))*100), 3)
+
+#odd
+round(((table(full_traindf$label)[2]/length(full_traindf$label))*100), 3)
+
+#split into 80% training set
+set.seed(1)
+ind <- createDataPartition(full_traindf$label,1,.8)[[1]] #indices
+traindf_temp = full_traindf[ind, ]
+
+#20% test data
+testdf = full_traindf[-ind, ]
+
+#20% valid data
+set.seed(1)
+ind <- createDataPartition(traindf_temp$label,1,.8)[[1]] #indices
+traindf = traindf_temp[ind, ] #new train
+validf = traindf_temp[-ind, ] #valid
+
+#check proportions of even and odd labels in both training and test sets
+((sum(testdf$label == "even")/length(testdf$label))*100)
+((sum(testdf$label == "odd")/length(testdf$label))*100)
+((sum(traindf$label == "even")/length(traindf$label))*100)
+((sum(traindf$label == "odd")/length(traindf$label))*100)
+
+########################start local h2o cluster#################################
+localH2O = h2o.init(ip = "localhost", port = 54321, startH2O = TRUE,min_mem_size="1g")
+localH2O = h2o.init()
+
+#######################convert data to h2o formats##############################
+options("h2o.use.data.table"=FALSE)
+traindf.h2o <- as.h2o(traindf) 
+testdf.h2o <- as.h2o(testdf)
+validf.h2o <- as.h2o(validf)
+  
+#######################Hold-out method################################
+
+# svm model misclassification rates
+V_misclas <- c()
+
+
+#################################svm1###########################################
+
+##default params
+
+# hyper_param Cost (C) = 1 default
+#kernel = guassian default
+#gamma = -1 default
+
+load("svm1.RData")
+#build model 
+# svm1 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 1,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = -1, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm1                                  
+#save(svm1, file="svm1.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.2008929, 3))
+
+#################################svm2###########################################
+
+##change cost
+
+# hyper_param Cost (C) = 0.1 **
+#kernel = guassian default
+#gamma = -1 default
+
+load("svm2.RData")
+#build model 
+svm2 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+                                   y = 1, #index of y variable label
+                                  training_frame = traindf.h2o, # train data in H2O format
+                                  validation_frame = validf.h2o,
+                                  ignore_const_cols = FALSE,
+                                  hyper_param = 0.1,  #cost
+                                  kernel_type = "gaussian", #kernel function
+                                  gamma = -1, #gamma
+                                  max_iterations = 1,
+                                  seed = 1) #set seed
+svm2                                
+#save(svm2, file="svm2.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.1979167, 3))
+
+
+#################################svm3###########################################
+
+##change cost
+
+# hyper_param Cost (C) = 0.01 **
+#kernel = guassian default
+#gamma = -1 default
+
+load("svm3.RData")
+#build model 
+# svm3 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 0.01,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = -1, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm3                               
+#save(svm3, file="svm3.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.2190807 , 3))
+
+#################################svm4###########################################
+
+##change cost
+
+# hyper_param Cost (C) = 3 **
+#kernel = guassian default
+#gamma = -1 default
+
+load("svm4.RData")
+#build model 
+# svm4 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 3,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = -1, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm4                               
+#save(svm4, file="svm4.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.2012235, 3))
+
+#################################svm5###########################################
+
+##change gamma
+
+# hyper_param Cost (C) = 0.1 
+#kernel = guassian default
+#gamma = 1 ***
+
+load("svm5.RData")
+#build model 
+# svm5 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 0.1,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = 1, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm5                                
+#save(svm5, file="svm5.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.5099206, 3))
+
+#################################svm6###########################################
+
+##change gamma
+
+# hyper_param Cost (C) = 0.1 
+#kernel = guassian default
+#gamma = 0.3 **
+
+load("svm6.RData")
+#build model 
+# svm6 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 0.1,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = 0.3, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm6                                
+#save(svm6, file="svm6.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.4361772 , 3))
+
+#################################svm7###########################################
+
+##change gamma
+
+# hyper_param Cost (C) = 0.1 
+#kernel = guassian default
+#gamma = 0.5 **
+
+load("svm7.RData")
+#build model 
+# svm7 = h2o.psvm(x = c(2:785), # index of x variables pixel0 to pixel784
+#                                    y = 1, #index of y variable label
+#                                   training_frame = traindf.h2o, # train data in H2O format
+#                                   validation_frame = validf.h2o,
+#                                   ignore_const_cols = FALSE,
+#                                   hyper_param = 0.1,  #cost
+#                                   kernel_type = "gaussian", #kernel function
+#                                   gamma = 0.5, #gamma
+#                                   max_iterations = 1,
+#                                   seed = 1) #set seed
+svm7                               
+#save(svm7, file="svm7.RData") #save data
+
+#append mean validation misclassiifcation to list
+V_misclas = cbind(V_misclas, round(0.4963624, 3))
+
+#########################Compare SVM models####################################
+
+# Empty table
+svm_h2o <- data.frame("Model ID" = NA,
+                      "Kernel" = NA,
+                      "Cost" = NA,
+                      "Gamma" = NA,
+                       "No. support vectors" = NA,
+                      "Mean validation misclassification rate" = NA)
+
+#rename col names of table
+colnames(svm_h2o) <- c("Model ID",
+                      "Kernel",
+                      "Cost",
+                      "Gamma",
+                      "No. support vectors",
+                      "Mean validation misclassification rate")
+
+#add information to tables
+svm_h2o[1, 1] = "svm1"
+svm_h2o[2, 1] = "svm2"
+svm_h2o[3, 1] = "svm3"
+svm_h2o[4, 1] = "svm4"
+svm_h2o[5, 1] = "svm5"
+svm_h2o[6, 1] = "svm6"
+svm_h2o[7, 1] = "svm7"
+
+svm_h2o[1, 2] = "Gaussian"
+svm_h2o[2, 2] = "Gaussian"
+svm_h2o[3, 2] = "Gaussian"
+svm_h2o[4, 2] = "Gaussian"
+svm_h2o[5, 2] = "Gaussian"
+svm_h2o[6, 2] = "Gaussian"
+svm_h2o[7, 2] = "Gaussian"
+
+svm_h2o[1, 3] = 1
+svm_h2o[2, 3] = 0.1
+svm_h2o[3, 3] = 0.01
+svm_h2o[4, 3] = 3
+svm_h2o[5, 3] = 0.1
+svm_h2o[6, 3] = 0.1
+svm_h2o[7, 3] = 0.1
+
+svm_h2o[1, 4] = -1
+svm_h2o[2, 4] = -1
+svm_h2o[3, 4] = -1
+svm_h2o[4, 4] = -1
+svm_h2o[5, 4] = 1
+svm_h2o[6, 4] = 0.3
+svm_h2o[7, 4] = 0.5
+
+svm_h2o[1, 5] = 24194
+svm_h2o[2, 5] = 24194
+svm_h2o[3, 5] = 24194
+svm_h2o[4, 5] = 24194
+svm_h2o[5, 5] = 24194
+svm_h2o[6, 5] = 24194
+svm_h2o[7, 5] = 24194
+
+svm_h2o[1, 6] = V_misclas[1]
+svm_h2o[2, 6] = V_misclas[2]
+svm_h2o[3, 6] = V_misclas[3]
+svm_h2o[4, 6] = V_misclas[4]
+svm_h2o[5, 6] = V_misclas[5]
+svm_h2o[6, 6] = V_misclas[6]
+svm_h2o[7, 6] = V_misclas[7]
+
+############################model performance##################################
+
+min(svm_h2o[,6]) #best model with min test misclassification rate
+svm2 # best svm net model
+svm2@parameters #parameters
+h2o.performance(svm2, valid = TRUE) #performance on valid set
+h2o.mse(svm2, valid = TRUE)  #extract validation misclas error rate train
+
+# Training data predictions
+svm_train_pred <- h2o.predict(svm2, traindf.h2o) #predictions on train set using model svm2
+svm_train_pred #predicted probabilities 
+svm_train_pred[,1] #predicted classes
+svm_yhat_train = as.factor(as.matrix(svm_train_pred$predict)) #convert to factor
+svm_train_confmat <- confusionMatrix(svm_yhat_train, traindf$label) #classification accuracy on train set
+#accuracy = 0.8078 
+
+
+# Test data predictions
+svm_test_pred <- h2o.predict(svm2, testdf.h2o) #predictions on test set using model svm2
+svm_test_pred #predicted probabilities 
+svm_test_pred[,1] #predicted classes
+svm_yhat_test = as.factor(as.matrix(svm_test_pred$predict)) #convert to factor
+svm_test_confmat = confusionMatrix(table(svm_yhat_test, testdf$label)) #classification accuracy on test set
+#accurcay = 0.8078
+
+# Confusion Matrix and Statistics
+# 
+#              
+# svm_yhat_test even  odd
+#          even 2834  583
+#          odd   870 3272
+#                                           
+#                Accuracy : 0.8078          
+#                  95% CI : (0.7987, 0.8166)
+#     No Information Rate : 0.51            
+#     P-Value [Acc > NIR] : < 2.2e-16       
+#                                           
+#                   Kappa : 0.6148          
+#                                           
+#  Mcnemar's Test P-Value : 6.239e-14       
+#                                           
+#             Sensitivity : 0.7651          
+#             Specificity : 0.8488          
+#          Pos Pred Value : 0.8294          
+#          Neg Pred Value : 0.7900          
+#              Prevalence : 0.4900          
+#          Detection Rate : 0.3749          
+#    Detection Prevalence : 0.4520          
+#       Balanced Accuracy : 0.8069          
+#                                           
+#        'Positive' Class : even 
+       
+# true positive rate or recall = true positives/total positives
+recall_svm <- round((2834/(2834+870)), 3)
+
+# true negative rate or specificity = true negatives/total negatives
+specificity_svm <-  round((3272/(3272+583)),3)
+
+# positive predictive value = true positives/(true positives+false positives)
+ppv_svm <- 0.8294 
+
+# F1 score = 2*(PPV*TPR/(PPV+TPR))
+f1_svm <- 2*((ppv_svm*recall_svm)/(ppv_svm+ppv_svm))
+
+# FPR = 1 - TNR
+FPR_svm <- 1 - specificity_svm
+
+#FNR = 1 - TPR
+FNR_svm <- 1 - recall_svm
+
+#Matthew's correlation coefiicent
+MCC_svm <- ((specificity_svm*recall_svm)-(FNR_svm*FPR_svm))/sqrt((recall_svm+FPR_svm)*(recall_svm+FNR_svm)*(specificity_svm+FPR_svm)*(specificity_svm+FNR_svm))
+
+```
+
+`r kable(svm_h2o, align = "c", caption="SVM models built using the hold-out method", format = "latex", position = "h!") %>% kable_classic(full_width = F) %>% footnote(number = c("Number of independent variables = 784. Number of dependent variables = 1. Number of dependent variable categories = 2", "Train size = 24194. Validation size = 6048. Test size = 7559"))%>% kable_styling(latex_options="scale_down")`
+
+```{r svm_error, echo=FALSE, fig.cap="Mean misclassification rate on the validation set across all SVM models", fig.dim = c(4, 4), cache = TRUE}
+
+#load libraries
+library(ggplot2)
+library(gridExtra)
+
+x2 = c(1:7)  #models
+
+# mean validation misclas rate
+y2 = as.numeric(c(svm_h2o[1, 6], svm_h2o[2, 6], svm_h2o[3, 6], svm_h2o[4, 6], svm_h2o[5, 6], svm_h2o[6, 6], svm_h2o[7, 6]))
+
+# data frame of x and y
+plot_df2 = data.frame("x" = x2, "y" = y2)
+  
+#plot valid misclas rate for each model
+ggplot(plot_df2, aes(x2, y2)) +
+  geom_point(color="darkblue")+
+  geom_line()+
+  xlab("Model svm")+
+  ylab("Mean validation misclassification rate")+
+  theme_minimal()+
+  geom_text(aes(label = round(y2, 3)), vjust = -0.5,  angle=90, col="darkblue")+
+  ylim(0.1, max(y2)*1.1)+
+  xlim(1, 7)+
+  theme(text = element_text(size = 10))
+
+```
+
+## **4.3. Unlabeled data**
+
+The unlabeled test_new data set was scaled, by dividing pixel values by 255. The best model, neural net model nn8, was used to make predictions on the scaled test_new data set. For comparison purposes, the best SVM model (svm2) was also used to make predictions on the scaled test_new data. Labels for each observation was determined by assuming the class with the largest predicted probability.
+
+# **5. Results and Discussion**
+
+## **5.1. Model performance and comparison**
+
+**i. Overview**
+
+**Table 5** shows that model nn8 had an overall better model performance on both the training and test sets, relative to model svm2. The performance metrics considers the 'even' and 'odd' label as the positive and negative class, respectively. 
+
+**ii. Accuracy**
+
+Both models had relatively good performance on the training set. However, The neural net model nn8 had a training accuracy of 0.953 which is larger than the 0.808 accuracy obtained by the support vector machine model svm2. 
+Model nn8 had a test accuracy of 0.950, with an insubstantial reduction in accuracy relative to its training accuracy of 0.953. Model svm2 had a test accuracy of 0.808, with no improvement relative to its training accuracy of 0.808. Model nn8's test accuracy was also larger than that of model svm2's test accuracy.
+
+**iii. Recall**
+
+Model nn8 had a recall of 0.954 on the test set, suggesting that 95.4% of positive observations (even) were correctly classified as true positives (even). Model svm2 had a recall of 0.765 on the test set, suggesting that 76.5% of positive observations (even) were correctly classified as true positives (even). Model nn8 had a 18.9% larger recall on the test set relative to model svm2, when considering recall as a percentage. Model nn8 is thus better at classifying true positives (even cases).
+
+**iv. Specificity**
+
+Model nn8 had a specificity of 0.946 on the test set which is larger than model svm2 with a specificity of 0.849 on the test set. For model nn8, 94.6% of negative (odd) observations were correctly classified as true negatives (odd). For model svm2, 84.9% of its negative (odd) observations were correctly classified as true negatives (odd). Model nn8 had a 9.7% larger specificity on the test set than model svm2, when considering specificity as a percentage. Model nn8 is thus better at classifying true negatives (odd cases).
+
+**v. Precision**
+
+Model nn8 had a precision value of 0.944 on the test set, suggesting 94.4% of positive predictions (even) were actual true positives (even). Model svm2 had a precision value of 0.829 on the test set, suggesting 82.9% of positive predictions (even) were actual true positives (even). Model nn8 had a 11.5% larger precision relative to model svm2, when considering precision as a percentage.
+
+**vi. F1-score**
+
+Model nn8 had an F1-score of 0.954 on the test set, suggesting that the model's ability to capture positive cases (while keeping false positives and false negatives low) is very good. Model svm2 had a F1-score of 0.765 on the test set, suggesting the model's ability to capture positive cases (while keeping false positives and false negatives low) is okay. Model nn8 had a 18.9% larger test F1-score relative to model svm2, when considering the F1-score as a percentage.
+
+**vii. Matthew's correlation coefficient**
+
+Finally, Matthew's correlation coefficient (MCC) was assessed, which summarizes the metrics in the confusion matrix (true positives, true negatives, false positives and false negatives) into a single metric. Model nn8 had a MCC of 0.9, which is close to 1, suggesting almost perfect agreement between the predictions and the actual classes of the observations. Model svm2 had a MCC of 0.616, which suggests that the model does not do the best job at classifying true cases. There is some disagreement between the predictions and the actual classes of the observations. Model nn8 had a 28.4% larger MCC on the test set relative to model svm2, when considering MCC as a percentage.
+
+```{r modelcompare, include = FALSE, eval=TRUE, cache = TRUE}
+
+
+#empty table for model comparisons
+model_compare = data.frame("Model1" = rep(NA, 25), "Model 2" = rep(NA, 25))
+
+#colnames
+colnames(model_compare) = c("Model 1", "Model 2")
+
+#row names
+rownames(model_compare) = c("Model ID", "Model type",
+                            "Train size", "Test size", "Validation size",
+                            "Activation function", "Hidden layers(neurons)", "Learning rate", "Epochs", "Input drop-out ratio", "Hidden drop-out ratios", "L1 regularization", "L2 regularization",
+                            "Cross-validation", "Hold-out",
+                            "Kernel", "Cost", "Gamma",
+                           "Train accuracy",
+                           "Test accuracy",
+                           "Test recall",
+                           "Test specificity",
+                           "Test Precision",
+                           "Test F1-score",
+                           "Test MCC")
+
+#insert model metrics
+model_compare[1, 1] ="nn8"
+model_compare[1, 2] ="svm2"
+
+model_compare[2, 1] ="Neural network"
+model_compare[2, 2] ="Support vector machine"
+
+model_compare[3, 1] = "27218 (9 folds)"
+model_compare[3, 2] = "24194"
+  
+model_compare[4, 1] = 7559
+model_compare[4, 2] = 7599
+  
+model_compare[5, 1] = "3024 (1 fold)"
+model_compare[5, 2] = 6048
+
+model_compare[6, 1] = "tanh"
+model_compare[7, 1] = "1(4)"
+model_compare[8, 1] = 1e-08
+model_compare[9, 1] = 1000
+model_compare[10, 1] = 0.1
+model_compare[11, 1] = "0.0"
+model_compare[12, 1] = 0.001
+model_compare[13, 1] = "0.0"
+model_compare[14, 1] = "10-fold"
+
+model_compare[15, 2] = "Yes"
+model_compare[16, 2] =  "Gaussian"
+model_compare[17, 2] = 0.1 
+model_compare[18, 2] = -1.0
+  
+model_compare[19, 1] = round(0.9533, 3)
+model_compare[19, 2] = round(0.808, 3)
+
+model_compare[20, 1] = round(0.9501, 3)
+model_compare[20, 2] = round(0.808 , 3)
+  
+model_compare[21, 1] = round(recall_nn, 3)
+model_compare[21, 2] = round(recall_svm, 3)
+  
+model_compare[22, 1] = round(specificity_nn, 3)
+model_compare[22, 2] = round(specificity_svm, 3)
+
+model_compare[23, 1] = round(ppv_nn, 3)
+model_compare[23, 2] = round(ppv_svm, 3)
+  
+model_compare[24, 1] = round(f1_nn, 3)
+model_compare[24, 2] = round(f1_svm, 3)
+
+  
+model_compare[25, 1] = round(MCC_nn, 3)
+model_compare[25, 2] = round(MCC_svm, 3)
+  
+
+```
+
+`r kable(model_compare, align = "c", caption="Model performance and comparison", format = "latex", position = "h!") %>% kable_classic(full_width = F) %>% footnote(number = c("Positive class : even", "Negative class : odd", "NA: not applicable"))`
+
+## **5.2. Best model evaluation (neural net nn8)**
+
+**i. Variable importance**
+
+In the variable importance plot (**figure 5**), we see that only 10 independent variables had a significant contribution to the training model. Pixel 485 (top) had the most significant predictive power, with the largest reduction in the squared training error. In contrast, pixel 708 (bottom) had the least predictive power with the smallest reduction in the squared training error, among the 10 independent variables.
+
+**ii. Weights and biases**
+
+**Table 6** shows the weights of the input layer to the hidden layer, which ranges from -0.331 to 0.162. Thus, the input neurons have a small positive and sometimes negative contribution to the hidden layer's activation function and output. **Table 7** shows the weights of the hidden layer to the output layer which ranges from -3.139 to 2.986, suggesting a larger positive and sometimes negative contribution of the hidden layer neurons to the output of the activation function in the output layer. **Table 8** shows the bias of the input layer to the neurons in the hidden layer, where the bias ranges from -1.374 to 1.55, suggesting moderate-positive and sometimes negative contribution of the bias to the output of the activation function in the hidden layer. **Table 8** also shows the bias of the hidden layer to the neurons in the output layer, where the bias ranges from -1.843 to 1.836, suggesting a larger positive and sometimes negative contribution of the bias to the output of the activation function in the output layer. 
+
+`r kable(weights_input_hidden, caption="Weights of input layer (columns) to hidden layer (rows) in neural net model nn8", format = "latex", position = "h!")%>% kable_classic(full_width = F) %>% footnote(number = c("Weights of variable important pixels")) %>% kable_styling(latex_options="scale_down")`
+`r kable(weights_hidden_output, caption="Weights of hidden layer (columns) to output layer (rows) in neural net model nn8", format = "latex", position = "h!")`
+`r kable(biasdf, caption="Bias of neural network model nn8", longtable = T, format = "latex", position = "h!")`
+
+**iii. ROC curve**
+
+Model nn8 has a ROC AUC of 0.988, 0.985 and 0.986 for its training, cross-validation and test sets, respectively. There is a marginal decrease in the ROC AUC from training to test and cross-validation sets. The ROC AUC metrics are close to 1, suggesting that model nn8 is close to a perfect classifier. The test set ROC AUC of 0.986, suggests that model nn8 has excellent discriminatory power between positive and negative cases, and generalizes well to unseen data. In addition, **figure 4** shows that the ROC curve is close to the top-left corner, indicative of a large true positive rate (TPR) and small false positive rate (FPR). The best classifier has a TPR = 0.942 and FPR = 0.041 at threshold = 0.612.
+
+
+# **6. Conclusion**
+
+In conclusion, neural net models are far more powerful than SVMs in terms of model performance on both the training and test sets. In addition, SVMs are computationally infeasible. Neural net models are the preferred choice in terms of algorithm speed, computational feasibility, model complexity and accuracy. 
+
+```{r supervised, include = FALSE, eval=TRUE, cache = TRUE}
+
+#read in csv
+supervised_test <- read.csv("test_new.csv")
+
+####################scale pixel data to range from 0 to 1#######################
+supervised_test[,2:785] = supervised_test[,2:785]/255 #divide by 255
+max(supervised_test[,2:785]) #max = 1
+min(supervised_test[,2:785]) #min = 0
+
+########################start local h2o cluster#################################
+localH2O = h2o.init(ip = "localhost", port = 54321, startH2O = TRUE,min_mem_size="1g")
+localH2O = h2o.init()
+
+#######################convert data to h2o formats##############################
+options("h2o.use.data.table"=FALSE)
+supervised_test.h2o <- as.h2o(supervised_test) 
+
+
+############################supervised predictions model neural net 8##############################
+
+sup_pred1 <- h2o.predict(h2o_model8, supervised_test.h2o) #predict probabilities of classes
+sup_pred1 #predicted probabilities 
+sup_predclass1 = as.matrix(sup_pred1[,1]) #extract classes and convert to matrix
+
+########################start local h2o cluster#################################
+localH2O = h2o.init(ip = "localhost", port = 54321, startH2O = TRUE,min_mem_size="1g")
+localH2O = h2o.init()
+
+############################supervised predictions model SVM 2##############################
+
+sup_pred2 <- h2o.predict(svm2, supervised_test.h2o) #predict probabilities of classes
+sup_pred2 #predicted probabilities 
+sup_predclass2 = as.matrix(sup_pred2[,1]) #extract classes and convert to matrix
+
+##################write predictions to scvs##############################################
+pred = data.frame(cbind(sup_predclass1,sup_predclass2))
+colnames(pred) = c("neuralnet8_BESTmodel", "SVM2")
+
+#uncomment
+#write.table(pred,'Digits_Pred_ALXNAT003.csv', quote = F, row.names = F, sep = ',', col.names=TRUE)
+
+```
+
+\newpage
+
+# *References*
+
+1. Team, D. (2021) Kernel functions-introduction to SVM Kernel andamp; Examples, DataFlair. Available at: https://data-flair.training/blogs/svm-kernel-functions/ (Accessed: 03 June 2023). 
+
+2. Editor (2020) Image recognition with deep neural networks and its use cases, AltexSoft. Available at: https://www.altexsoft.com/blog/image-recognition-neural-networks-use-cases/ (Accessed: 03 June 2023). 
+
+3. Brownlee, J. (2019) How to manually scale image pixel data for deep learning, MachineLearningMastery.com. Available at: https://machinelearningmastery.com/how-to-manually-scale-image-pixel-data-for-deep-learning/ (Accessed: 01 June 2023). 
+
+4. How to normalize, center, and standardize image pixels in Keras? (2023) GeeksforGeeks. Available at: https://www.geeksforgeeks.org/how-to-normalize-center-and-standardize-image-pixels-in-keras/ (Accessed: 01 June 2023). 
+
+5. Murillo-Escobar, M.A., Cruz-Hernández, C., Abundiz-Pérez, F., López-Gutiérrez, R.M. and Del Campo, O.A., 2015. A RGB image encryption algorithm based on total plain image characteristics and chaos. Signal Processing, 109, pp.119-131.
+
+6. Sharma, S. (2022) Activation functions in neural networks, Medium. Available at: https://towardsdatascience.com/activation-functions-neural-networks-1cbd9f8d91d6 (Accessed: 03 June 2023). 
+
+7. TanhExp: A smooth activation function - wiley online library. Available at: https://ietresearch.onlinelibrary.wiley.com/doi/full/10.1049/cvi2.12020 (Accessed: 03 June 2023). 
+
+8. Kumar, G.S. (2020) Regularization: Machine learning, Medium. Available at: https://towardsdatascience.com/regularization-machine-learning-891e9a62c58d (Accessed: 03 June 2023). 
+
+9. Brownlee, J. (2022) Dropout regularization in deep learning models with Keras, MachineLearningMastery.com. Available at: https://machinelearningmastery.com/dropout-regularization-deep-learning-models-keras/ (Accessed: 03 June 2023). 
+
+
+10. RBF SVM parameters. Available at: https://scikit-learn.org/stable/auto_examples/svm
+
+
